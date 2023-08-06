@@ -1,5 +1,4 @@
-const { Telegraf } = require("telegraf");
-const { Markup } = Telegraf;
+const { Telegraf, Markup } = require("telegraf");
 const crypto = require('crypto');
 const express = require("express");
 const mongoose = require("mongoose");
@@ -95,7 +94,7 @@ bot.command("start", (ctx) => {
     reply_markup: {
       keyboard: [
         [{ text: "/help" }],
-       
+
       ],
       resize_keyboard: true,
       one_time_keyboard: true,
@@ -118,7 +117,7 @@ bot.command("help", (ctx) => {
     reply_markup: {
       keyboard: [
         [{ text: "/setProfile" }, { text: "/help" }],
-        [{ text: "/cari" }, {text: "/update"}],[{ text: "/profile" }],
+        [{ text: "/cari" }, { text: "/update" }], [{ text: "/profile" }],
       ],
       resize_keyboard: true,
       one_time_keyboard: true,
@@ -197,7 +196,7 @@ bot.command('setProfile', async (ctx) => {
             ctx.reply('Profil berhasil dibuat.');
 
             // Setelah profil berhasil dibuat, hapus middleware dari event listener
-      
+
           }
         }
       }
@@ -267,7 +266,13 @@ bot.command('up', async (ctx) => {
     ctx.reply('Terjadi kesalahan saat memperbarui profil.');
   }
 });
-                            
+
+// Definisikan perintah '/update' untuk memberikan informasi tentang cara menggunakan '/up'
+bot.command("update", (ctx) => {
+  const helpMessage = "Cara mengupdate profil:\n\n /up [Nama] [Jenis Kelamin] [Face Claim] [Minat] [Kepribadian]\n\nContoh: /up Rena perempuan mikasa pacar ramah";
+  ctx.reply(helpMessage);
+});
+
 // Mendengarkan perintah '/chat {userid}'
 bot.command("chat", (ctx) => {
   const chatId = ctx.chat.id;
@@ -306,7 +311,7 @@ bot.command("chat", (ctx) => {
         }
 
         // Kirim pesan ke pengguna target
-        ctx.telegram.sendMessage(DecryptTarget, "Chat Dari : " + profile.name+ "\n\n" + message);
+        ctx.telegram.sendMessage(DecryptTarget, "Chat Dari : " + profile.name + "\n\n" + message);
         ctx.reply("Pesan berhasil dikirim.");
         console.log(profile)
       } catch (error) {
@@ -315,6 +320,114 @@ bot.command("chat", (ctx) => {
       }
     }
   });
+});
+
+//cari command
+
+// Fungsi untuk membuat markup inline keyboard untuk navigasi halaman
+function getPaginationButtons(page) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        /* Inline buttons. 2 side-by-side */
+        [{ text: "Sebelumnya", callback_data: `prev_${page - 1}` }, { text: "Berikutnya", callback_data: `next_${page + 1}` }],
+
+        /* Jika Anda ingin menambahkan tombol lain di sini, Anda bisa melakukannya */
+      ],
+    },
+  };
+}
+
+
+// Fungsi untuk mencari pasangan berdasarkan preferensi dengan sistem paging
+async function cariPasangan(userId, page, pageSize, skip) {
+  try {
+    // Ambil profil pengguna
+    const userProfile = await Profile.findOne({ userId });
+
+    if (!userProfile) {
+      return "Profil Anda belum dibuat. Gunakan perintah /setProfile untuk membuat profil Anda terlebih dahulu.";
+    }
+
+    const userGender = userProfile.gender;
+
+    // Mencari profil dengan gender yang berbeda dari pengguna saat ini dengan sistem paging
+    const matchingProfiles = await Profile.find({
+      gender: { $ne: userGender },
+      userId: { $ne: userId }, // Exclude current user from the results
+    })
+      .skip(skip)
+      .limit(pageSize);
+
+    if (matchingProfiles.length === 0) {
+      return "Tidak ada pasangan yang cocok dengan preferensi Anda saat ini.";
+    }
+
+    // Tampilkan profil yang cocok dengan preferensi pasangan
+    let resultMessage = `Halaman ${page}:\n\n`;
+    matchingProfiles.forEach((profile) => {
+      resultMessage += `Nama: ${profile.name}\nJenis Kelamin: ${profile.gender}\nFace Claim: ${profile.faceClaim}\nKepribadian: ${profile.personality}\n\n`;
+    });
+
+    // Cek apakah ada halaman sebelumnya
+    if (skip >= pageSize) {
+      resultMessage += "Ketik /cari " + (page - 1) + " untuk melihat halaman sebelumnya.\n";
+    }
+
+    // Cek apakah ada halaman berikutnya
+    const totalMatchingProfiles = await Profile.countDocuments({
+      gender: { $ne: userGender },
+      userId: { $ne: userId },
+    });
+    if (skip + pageSize < totalMatchingProfiles) {
+      resultMessage += "Ketik /cari " + (page + 1) + " untuk melihat halaman berikutnya.\n";
+    }
+
+    return resultMessage;
+  } catch (error) {
+    console.error("Kesalahan saat mencari pasangan:", error);
+    return "Terjadi kesalahan saat mencari pasangan.";
+  }
+}
+
+
+// Perintah '/cari' dengan menggunakan tombol inline untuk navigasi halaman
+bot.command("cari", async (ctx) => {
+  const userId = ctx.from.id;
+  const page = Number(ctx.message.text.split(" ")[1]) || 1; // Jika tidak ada nomor halaman, default ke halaman 1
+
+  try {
+    const pageSize = 5; // Jumlah profil yang ditampilkan dalam satu halaman
+    const skip = (page - 1) * pageSize;
+
+    const resultMessage = await cariPasangan(userId, page, pageSize, skip);
+
+    // Kirim pesan hasil pencarian dengan tombol inline untuk navigasi halaman
+    ctx.reply(resultMessage, getPaginationButtons(page));
+  } catch (error) {
+    console.error("Kesalahan saat mencari pasangan:", error);
+    ctx.reply("Terjadi kesalahan saat mencari pasangan.");
+  }
+});
+
+// Tangani callback dari tombol inline untuk navigasi halaman
+bot.action(/(prev|next)_\d+/, async (ctx) => {
+  const userId = ctx.from.id;
+  const action = ctx.match[1];
+  const page = Number(ctx.match[0].split("_")[1]);
+
+  const pageSize = 5;
+  const skip = (page - 1) * pageSize;
+
+  try {
+    const resultMessage = await cariPasangan(userId, page, pageSize, skip);
+
+    // Update pesan asli dengan hasil pencarian baru dan tombol inline yang diperbarui
+    ctx.editMessageText(resultMessage, getPaginationButtons(page));
+  } catch (error) {
+    console.error("Kesalahan saat mencari pasangan:", error);
+    ctx.reply("Terjadi kesalahan saat mencari pasangan.");
+  }
 });
 
 // Jalankan bot
