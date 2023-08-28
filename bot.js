@@ -1,8 +1,9 @@
-const { Telegraf, Markup, Extra } = require("telegraf");
+const { Telegraf, Markup, session   } = require("telegraf");
 const crypto = require('crypto');
 const express = require("express");
 const mongoose = require("mongoose");
 
+// Mengaktifkan session
 
 require('dotenv').config();
 
@@ -56,7 +57,6 @@ const Profile = mongoose.model("Profile", profileSchema);
 const preferensiPasanganSchema = new mongoose.Schema({
   userId: Number,
   gender: String,
-
   interestTo: String,
 });
 
@@ -82,7 +82,7 @@ app.use(bot.webhookCallback(webhookPath));
 
 // Mengatur endpoint webhook
 bot.telegram.setWebhook(`https://example.com${webhookPath}`); // Ganti dengan URL yang valid sesuai dengan konfigurasi server Anda
-
+bot.use(session()); // Aktifkan penggunaan sesi di bot Anda
 
 // Mendengarkan perintah '/start'
 bot.command("start", (ctx) => {
@@ -125,7 +125,7 @@ bot.command("help", (ctx) => {
 
   // Mengirim pesan dengan tombol
   ctx.reply(
-`
+    `
       Selamat datang di Tinder Roleplay Bot! Berikut adalah daftar perintah yang dapat Anda gunakan:\n/help - Menampilkan daftar perintah yang tersedia.\n/setProfile - Membuat profil baru.\n/profile - Menampilkan profil Anda.\n/update - Memperbarui profil.\n/cari - Mencari pasangan.\n/updatePreferensi - Mengupdate preferensi pasangan Anda.
       `,
     keyboard
@@ -191,7 +191,7 @@ bot.command('setProfile', async (ctx) => {
             ctx.reply('Profil berhasil dibuat.');
 
             // Setelah profil berhasil dibuat, hapus middleware dari event listener
-      
+
           }
         }
       }
@@ -203,6 +203,23 @@ bot.command('setProfile', async (ctx) => {
     ctx.reply('Terjadi kesalahan saat membuat profil.');
   }
 });
+
+// Definisikan perintah '/profile' untuk menampilkan profil pengguna
+bot.command("profile", async (ctx) => {
+  const userId = ctx.from.id;
+  try {
+    const profile = await Profile.findOne({ userId });
+    if (!profile) {
+      ctx.reply("Profil belum dibuat. Gunakan perintah /setProfile untuk membuat profil kamu.");
+      return;
+    }
+    ctx.reply(`Profile :\nNama: ${profile.name}\nJenis Kelamin: ${profile.gender}\nFace Claim: ${profile.faceClaim}\nKepribadian: ${profile.personality} \nInterest: ${profile.interestTo}`);
+  } catch (error) {
+    console.error("Kesalahan saat mengambil profil:", error);
+    ctx.reply("Terjadi kesalahan saat mengambil profil.");
+  }
+});
+
 
 // Tangani perintah /up untuk memperbarui profil
 bot.command('up', async (ctx) => {
@@ -234,7 +251,7 @@ bot.command('up', async (ctx) => {
       await profile.save();
     }
 
-    ctx.reply('Profil berhasil diperbarui!');
+    ctx.reply('Profile berhasil diperbarui!');
   } catch (error) {
     console.error('Kesalahan saat memperbarui profil:', error);
     ctx.reply('Terjadi kesalahan saat memperbarui profil.');
@@ -247,181 +264,187 @@ bot.command("update", (ctx) => {
   ctx.reply(helpMessage);
 });
 
-// Mendengarkan perintah '/chat {userid}'
-bot.command("chat", (ctx) => {
-  const chatId = ctx.chat.id;
-  const userId = ctx.from.id;
-  const targetUserId = ctx.message.text.split(" ")[1];
 
-  const DecryptTarget = decryptData(targetUserId)
+const activeChats = {}; // Objek untuk melacak obrolan yang sedang berlangsung
+const userCurrentIndexes = {}; // Objek untuk melacak currentIndex pengguna
 
-  if (DecryptTarget === userId.toString()) {
-    ctx.reply("Anda tidak dapat mengirim pesan kepada diri sendiri.");
+// Command /cari
+bot.command('cari', async (ctx) => {
+  const userId = ctx.message.from.id;
+
+  if (!userCurrentIndexes[userId]) {
+    userCurrentIndexes[userId] = 0; // Inisialisasi currentIndex jika belum ada
+  }
+
+  const currentIndex = userCurrentIndexes[userId];
+  
+
+  // Cari PreferensiPasangan dengan userId yang sesuai
+  const preferensi = await PreferensiPasangan.findOne({ userId: userId });
+
+  if (!preferensi) {
+    ctx.reply('Anda belum memiliki preferensi pasangan. Silakan gunakan /updatePreferensi untuk membuatnya.');
     return;
   }
 
-  // Membangun keyboard inline untuk membalas pesan
-  const keyboard = Markup.inlineKeyboard([
-    Markup.button.callback("Balas", `/reply${userId}`),
-  ]);
+  // Dapatkan gender dan interestTo dari preferensi
+  const gender = preferensi.gender;
+  const interestTo = preferensi.interestTo;
 
-  ctx.reply(
-    "Anda sedang dalam mode chat. Kirimkan pesan untuk diteruskan ke pengguna yang dipilih.",
-    keyboard
-  );
+  // Cari profile yang cocok
+  const matchingProfiles = await Profile.find({ gender: gender, interestTo: interestTo });
 
-  // Menangkap pesan dari pengguna dan meneruskannya ke pengguna target
-  bot.on("text", async (ctx) => {
-    if (ctx.message.from.id === userId) {
-      const message = ctx.message.text;
 
-      try {
-        // Cek apakah pengguna yang dituju ada dalam daftar pengguna yang diblokir
-        const profile = await Profile.findOne({ userId: DecryptTarget });
+  if (matchingProfiles.length === 0) {
+    ctx.reply('Tidak ditemukan pasangan yang cocok.');
+    return;
+  }
 
-        if (!profile || profile.blockedUsers.includes(userId)) {
-          ctx.reply("Pengguna yang dituju tidak dapat menerima pesan.");
-          return;
-        }
 
-        // Kirim pesan ke pengguna target
-        ctx.telegram.sendMessage(DecryptTarget, "Chat Dari : " + profile.name + "\n\n" + message);
-        ctx.reply("Pesan berhasil dikirim.");
-        console.log(profile)
-      } catch (error) {
-        console.error("Kesalahan saat meneruskan pesan:", error);
-        ctx.reply("Terjadi kesalahan saat meneruskan pesan.");
-      }
+  const showProfile = (index) => {
+    userCurrentIndexes[userId] = index; // Simpan currentIndex pengguna
+
+    const profile = matchingProfiles[index];
+
+    if (!profile) {
+      ctx.reply('Tidak ada pasangan yang cocok dengan Anda lagi.');
+      return;
     }
-  });
-});
 
-// Fungsi untuk membuat markup inline keyboard untuk navigasi halaman
-function getPaginationButtons(page) {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        /* Inline buttons. 2 side-by-side */
-        [{ text: "Sebelumnya", callback_data: `prev_${page - 1}` }, { text: "Berikutnya", callback_data: `next_${page + 1}` }],
+    const message = `
+Name: ${profile.name}
+Gender: ${profile.gender}
+Face Claim: ${profile.faceClaim}
+Personality: ${profile.personality}
+    `;
 
-        /* Jika Anda ingin menambahkan tombol lain di sini, Anda bisa melakukannya */
+
+
+    const inlineKeyboard = [
+      [
+        { text: 'Previous', callback_data: 'prev' },
+        { text: 'Next', callback_data: 'next' },
       ],
-    },
+    ];
+
+    // Tambahkan tombol "Mulai Obrolan" jika obrolan belum dimulai
+    if (!activeChats[userId] || activeChats[userId].endTime < new Date()) {
+      inlineKeyboard.push([{ text: 'Mulai Obrolan', callback_data: 'start_chat' }]);
+    }
+
+    ctx.reply(message, {
+      reply_markup: {
+        inline_keyboard: inlineKeyboard,
+      },
+    });
   };
-}
 
+  showProfile(currentIndex);
 
-async function cariPasangan(userId, page, pageSize, skip) {
-  try {
-    // Ambil preferensi pasangan berdasarkan userId
-    const preferensiPasangan = await PreferensiPasangan.findOne({ userId });
+   // ...
 
-    if (!preferensiPasangan) {
-      const button = {
-        text: "",
-        callback_data: "create_preference",
-      };
-    
-      const markup = {
-        inline_keyboard: [[button]],
-      };
-    
-      return {
-        text: "Preferensi pasangan belum dibuat. Silakan atur preferensi pasangan Anda terlebih dahulu. \n Ketik /WupdatePreferensi ",
-        reply_markup: markup,
-      };
+bot.action('prev', (ctx) => {
+  const currentIndex = userCurrentIndexes[userId];
+  const newIndex = Math.max(0, currentIndex - 1);
+  showProfile(newIndex);
+});
 
+bot.action('next', (ctx) => {
+  const currentIndex = userCurrentIndexes[userId];
+  const newIndex = Math.min(currentIndex + 1, matchingProfiles.length - 1); // Perbaikan indeks array
+  showProfile(newIndex);
+});
 
+// Fungsi untuk menangani pesan dari inisiator dan receiver
+bot.on('text', async (ctx) => {
+  const userId = ctx.message.from.id;
+
+  if (activeChats[userId]) {
+    const chat = activeChats[userId];
+    const receiverUserId = chat.receiverUserId;
+    const initiatorUserId = chat.initiatorUserId;
+
+    // Kirim pesan yang diterima dari inisiator ke receiver dan sebaliknya
+    try {
+      if (userId === initiatorUserId) {
+        // Kirim pesan hanya jika pengirim adalah inisiator
+        await ctx.telegram.sendMessage(receiverUserId, ctx.message.text);
+      } else if (userId === receiverUserId) {
+        // Kirim pesan hanya jika pengirim adalah receiver
+        await ctx.telegram.sendMessage(initiatorUserId, ctx.message.text);
+      }
+    } catch (error) {
+      console.error('Kesalahan saat mengirim pesan:', error);
+      ctx.reply('Terjadi kesalahan saat mengirim pesan.');
+    }
+  }
+});
+
+// Fungsi untuk memulai obrolan
+bot.action('start_chat', async (ctx) => {
+  const initiatorUserId = ctx.from.id;
+  const currentIndex = userCurrentIndexes[initiatorUserId];
   
-      
-    }
-
-    const userGender = preferensiPasangan.gender;
-
-    // Mencari preferensi pasangan dengan gender yang berbeda dari pengguna saat ini dengan sistem paging
-    const matchingPreferences = await PreferensiPasangan.find({
-      gender: { $ne: userGender },
-      userId: { $ne: userId }, // Exclude current user's preferences from the results
-    })
-      .skip(skip)
-      .limit(pageSize);
-
-    if (matchingPreferences.length === 0) {
-      return "Tidak ada preferensi pasangan yang cocok dengan preferensi Anda saat ini.";
-    }
-
-    // Tampilkan preferensi pasangan yang cocok
-    let resultMessage = `Halaman ${page}:\n\n`;
-    matchingPreferences.forEach((preference) => {
-      resultMessage += `User ID: ${preference.userId}\nJenis Kelamin: ${preference.gender}\nFace Claim: ${preference.faceClaim}\nMinat: ${preference.interestTo}\nKepribadian: ${preference.personality}\n\n`;
-    });
-
-    // Cek apakah ada halaman sebelumnya
-    if (skip >= pageSize) {
-      resultMessage += "Ketik /cari " + (page - 1) + " untuk melihat halaman sebelumnya.\n";
-    }
-
-    // Cek apakah ada halaman berikutnya
-    const totalMatchingPreferences = await PreferensiPasangan.countDocuments({
-      gender: { $ne: userGender },
-      userId: { $ne: userId },
-    });
-    if (skip + pageSize < totalMatchingPreferences) {
-      resultMessage += "Ketik /cari " + (page + 1) + " untuk melihat halaman berikutnya.\n";
-    }
-
-    return resultMessage;
-  } catch (error) {
-    console.error("Kesalahan saat mencari preferensi pasangan:", error);
-    return "Terjadi kesalahan saat mencari preferensi pasangan.";
+  // Dapatkan profil yang sesuai berdasarkan currentIndex
+  const selectedProfile = matchingProfiles[currentIndex];
+  
+  if (!selectedProfile) {
+    ctx.reply('Profil tidak ditemukan.');
+    return;
   }
-}
-
-// Perintah '/cari' dengan menggunakan tombol inline untuk navigasi halaman
-bot.command("cari", async (ctx) => {
-  const userId = ctx.from.id;
-  const page = Number(ctx.message.text.split(" ")[1]) || 1; // Jika tidak ada nomor halaman, default ke halaman 1
-
+  
+  const receiverUserId = selectedProfile.userId;
+  
+  const currentTime = new Date();
+  const endTime = new Date(currentTime.getTime() + 30 * 60 * 1000); // Waktu berakhir 30 menit dari sekarang
+  
+  activeChats[initiatorUserId] = {
+    receiverUserId: receiverUserId,
+    initiatorUserId: initiatorUserId,
+    startTime: currentTime,
+    endTime: endTime,
+  };
+  
+  // Kirim pesan ke penerima (receiver)
   try {
-    const pageSize = 5; // Jumlah profil yang ditampilkan dalam satu halaman
-    const skip = (page - 1) * pageSize;
-
-    const resultMessage = await cariPasangan(userId, page, pageSize, skip);
-
-    // Kirim pesan hasil pencarian dengan tombol inline untuk navigasi halaman
-    ctx.reply(resultMessage, getPaginationButtons(page));
+    await ctx.telegram.sendMessage(receiverUserId, 'Obrolan dimulai! Anda memiliki 30 menit untuk berbicara.');
   } catch (error) {
-    console.error("Kesalahan saat mencari pasangan:", error);
-    ctx.reply("Terjadi kesalahan saat mencari pasangan.");
+    console.error('Kesalahan saat mengirim pesan ke penerima:', error);
+    ctx.reply('Terjadi kesalahan saat memulai obrolan.');
+  }
+  
+  // Kirim pesan ke inisiator
+  try {
+    await ctx.telegram.sendMessage(initiatorUserId, 'Obrolan dimulai! Anda memiliki 30 menit untuk berbicara.');
+  } catch (error) {
+    console.error('Kesalahan saat mengirim pesan ke inisiator:', error);
+    ctx.reply('Obrolan dimulai! Anda memiliki 30 menit untuk berbicara.');
   }
 });
 
-// Tangani callback dari tombol inline untuk navigasi halaman
-bot.action(/(prev|next)_\d+/, async (ctx) => {
-  const userId = ctx.from.id;
-  const action = ctx.match[1];
-  const page = Number(ctx.match[0].split("_")[1]);
 
-  const pageSize = 5;
-  const skip = (page - 1) * pageSize;
 
-  try {
-    const resultMessage = await cariPasangan(userId, page, pageSize, skip);
 
-    // Update pesan asli dengan hasil pencarian baru dan tombol inline yang diperbarui
-    ctx.editMessageText(resultMessage, getPaginationButtons(page));
-  } catch (error) {
-    console.error("Kesalahan saat mencari pasangan:", error);
-    ctx.reply("Terjadi kesalahan saat mencari pasangan.");
-  }
+    
 });
+
+setInterval(() => {
+  const currentTime = new Date();
+  for (const userId in activeChats) {
+    if (activeChats[userId].endTime < currentTime) {
+      delete activeChats[userId]; // Hapus obrolan yang sudah berakhir dari daftar obrolan aktif
+    }
+  }
+}, 60 * 1000); // Interval setiap 1 menit
+
+
 
 bot.command("updatePreferensi", async (ctx) => {
   const userId = ctx.from.id;
   try {
     // Menemukan atau membuat preferensi pasangan berdasarkan userId
     let preferensi = await PreferensiPasangan.findOne({ userId });
-    
+
     if (!preferensi) {
       // Jika preferensi pasangan belum ada, buat profil baru
       const commandArguments = ctx.message.text.split(" ");
@@ -429,11 +452,11 @@ bot.command("updatePreferensi", async (ctx) => {
         ctx.reply('Cara mengupdate prefensi pasangan:\n\n /updatePreferensi [Jenis Kelamin] [Tertarik Mencari]');
         return;
       }
-      
+
       const [, gender, ...interestTo] = commandArguments;
       const newPreferensi = new PreferensiPasangan({ userId, gender, interestTo: interestTo.join(" ") });
       await newPreferensi.save();
-      
+
       ctx.reply('Profil preferensi pasangan berhasil dibuat!');
     } else {
       // Jika preferensi pasangan sudah ada, perbarui profil
@@ -442,12 +465,12 @@ bot.command("updatePreferensi", async (ctx) => {
         ctx.reply('Cara mengupdate prefensi pasangan:\n\n /updatePreferensi [Jenis Kelamin] [Tertarik Mencari]');
         return;
       }
-      
+
       const [, gender, ...interestTo] = commandArguments;
       preferensi.gender = gender;
       preferensi.interestTo = interestTo.join(" ");
       await preferensi.save();
-      
+
       ctx.reply('Profil preferensi pasangan berhasil diperbarui!');
     }
   } catch (error) {
@@ -455,15 +478,6 @@ bot.command("updatePreferensi", async (ctx) => {
     ctx.reply('Terjadi kesalahan saat memperbarui preferensi pasangan.');
   }
 });
-
-
-
-
-
-
-
-
-
 
 
 
