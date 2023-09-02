@@ -1,5 +1,6 @@
-const { Telegraf, Markup, session   } = require("telegraf");
-const crypto = require('crypto');
+const { Telegraf, Markup, session } = require("telegraf");;
+const base64url = require('base64url');
+const CryptoJS = require('crypto-js');
 const express = require("express");
 const mongoose = require("mongoose");
 
@@ -7,20 +8,6 @@ const mongoose = require("mongoose");
 
 require('dotenv').config();
 
-// Fungsi enkripsi dan dekripsi
-function encryptData(data) {
-  const cipher = crypto.createCipher('aes-256-cbc', 'secret-key');
-  let encryptedData = cipher.update(data, 'utf-8', 'base64');
-  encryptedData += cipher.final('base64');
-  return encryptedData;
-}
-
-function decryptData(data) {
-  const decipher = crypto.createDecipher('aes-256-cbc', 'secret-key');
-  let decryptedData = decipher.update(data, 'base64', 'utf-8');
-  decryptedData += decipher.final('utf-8');
-  return decryptedData;
-}
 
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
 const mongodbAtlasURL = process.env.MONGODB_ATLAS_URL;
@@ -39,6 +26,15 @@ mongoose
   .catch((error) => {
     console.error("Kesalahan saat terhubung ke MongoDB Atlas:", error);
   });
+
+ // Mendefinisikan model Chat
+const roomSchema = new mongoose.Schema({
+  roomId: String,
+  users: [Number],
+  messages: [String],
+});
+
+const RoomModel = mongoose.model('Room', roomSchema);
 
 // Definisikan skema dan model profil
 const profileSchema = new mongoose.Schema({
@@ -264,179 +260,166 @@ bot.command("update", (ctx) => {
   ctx.reply(helpMessage);
 });
 
+const userCurrentIndexes = {};
 
-const activeChats = {}; // Objek untuk melacak obrolan yang sedang berlangsung
-const userCurrentIndexes = {}; // Objek untuk melacak currentIndex pengguna
-
-// Command /cari
 bot.command('cari', async (ctx) => {
   const userId = ctx.message.from.id;
 
-  if (!userCurrentIndexes[userId]) {
-    userCurrentIndexes[userId] = 0; // Inisialisasi currentIndex jika belum ada
-  }
-
-  const currentIndex = userCurrentIndexes[userId];
-  
-
-  // Cari PreferensiPasangan dengan userId yang sesuai
-  const preferensi = await PreferensiPasangan.findOne({ userId: userId });
-
-  if (!preferensi) {
-    ctx.reply('Anda belum memiliki preferensi pasangan. Silakan gunakan /updatePreferensi untuk membuatnya.');
-    return;
-  }
-
-  // Dapatkan gender dan interestTo dari preferensi
-  const gender = preferensi.gender;
-  const interestTo = preferensi.interestTo;
-
-  // Cari profile yang cocok
-  const matchingProfiles = await Profile.find({ gender: gender, interestTo: interestTo });
-
-
-  if (matchingProfiles.length === 0) {
-    ctx.reply('Tidak ditemukan pasangan yang cocok.');
-    return;
-  }
-
-
-  const showProfile = (index) => {
-    userCurrentIndexes[userId] = index; // Simpan currentIndex pengguna
-
-    const profile = matchingProfiles[index];
-
-    if (!profile) {
-      ctx.reply('Tidak ada pasangan yang cocok dengan Anda lagi.');
-      return;
+  try {
+    if (!userCurrentIndexes[userId]) {
+      userCurrentIndexes[userId] = 0;
     }
 
-    const message = `
-Name: ${profile.name}
-Gender: ${profile.gender}
-Face Claim: ${profile.faceClaim}
-Personality: ${profile.personality}
-    `;
+    const currentIndex = userCurrentIndexes[userId];
+    const preferensi = await PreferensiPasangan.findOne({ userId });
 
-
-
-    const inlineKeyboard = [
-      [
-        { text: 'Previous', callback_data: 'prev' },
-        { text: 'Next', callback_data: 'next' },
-      ],
-    ];
-
-    // Tambahkan tombol "Mulai Obrolan" jika obrolan belum dimulai
-    if (!activeChats[userId] || activeChats[userId].endTime < new Date()) {
-      inlineKeyboard.push([{ text: 'Mulai Obrolan', callback_data: 'start_chat' }]);
+    if (!preferensi) {
+      return ctx.reply('Anda belum memiliki preferensi pasangan. Silakan gunakan /updatePreferensi untuk membuatnya.');
     }
 
-    ctx.reply(message, {
-      reply_markup: {
-        inline_keyboard: inlineKeyboard,
-      },
-    });
-  };
+    const { gender, interestTo } = preferensi;
+    const matchingProfiles = await Profile.find({ gender, interestTo });
 
-  showProfile(currentIndex);
+    if (matchingProfiles.length === 0) {
+      return ctx.reply('Tidak ditemukan pasangan yang cocok.');
+    }
 
-   // ...
+    const showProfile = (index) => {
+      userCurrentIndexes[userId] = index;
+      const profile = matchingProfiles[index];
 
-bot.action('prev', (ctx) => {
-  const currentIndex = userCurrentIndexes[userId];
-  const newIndex = Math.max(0, currentIndex - 1);
-  showProfile(newIndex);
-});
-
-bot.action('next', (ctx) => {
-  const currentIndex = userCurrentIndexes[userId];
-  const newIndex = Math.min(currentIndex + 1, matchingProfiles.length - 1); // Perbaikan indeks array
-  showProfile(newIndex);
-});
-
-// Fungsi untuk menangani pesan dari inisiator dan receiver
-bot.on('text', async (ctx) => {
-  const userId = ctx.message.from.id;
-
-  if (activeChats[userId]) {
-    const chat = activeChats[userId];
-    const receiverUserId = chat.receiverUserId;
-    const initiatorUserId = chat.initiatorUserId;
-
-    // Kirim pesan yang diterima dari inisiator ke receiver dan sebaliknya
-    try {
-      if (userId === initiatorUserId) {
-        // Kirim pesan hanya jika pengirim adalah inisiator
-        await ctx.telegram.sendMessage(receiverUserId, ctx.message.text);
-      } else if (userId === receiverUserId) {
-        // Kirim pesan hanya jika pengirim adalah receiver
-        await ctx.telegram.sendMessage(initiatorUserId, ctx.message.text);
+      if (!profile) {
+        return ctx.reply('Tidak ada pasangan yang cocok dengan Anda lagi.');
       }
-    } catch (error) {
-      console.error('Kesalahan saat mengirim pesan:', error);
-      ctx.reply('Terjadi kesalahan saat mengirim pesan.');
-    }
-  }
-});
 
-// Fungsi untuk memulai obrolan
-bot.action('start_chat', async (ctx) => {
-  const initiatorUserId = ctx.from.id;
-  const currentIndex = userCurrentIndexes[initiatorUserId];
-  
-  // Dapatkan profil yang sesuai berdasarkan currentIndex
-  const selectedProfile = matchingProfiles[currentIndex];
-  
-  if (!selectedProfile) {
-    ctx.reply('Profil tidak ditemukan.');
-    return;
-  }
-  
-  const receiverUserId = selectedProfile.userId;
-  
-  const currentTime = new Date();
-  const endTime = new Date(currentTime.getTime() + 30 * 60 * 1000); // Waktu berakhir 30 menit dari sekarang
-  
-  activeChats[initiatorUserId] = {
-    receiverUserId: receiverUserId,
-    initiatorUserId: initiatorUserId,
-    startTime: currentTime,
-    endTime: endTime,
-  };
-  
-  // Kirim pesan ke penerima (receiver)
-  try {
-    await ctx.telegram.sendMessage(receiverUserId, 'Obrolan dimulai! Anda memiliki 30 menit untuk berbicara.');
-  } catch (error) {
-    console.error('Kesalahan saat mengirim pesan ke penerima:', error);
-    ctx.reply('Terjadi kesalahan saat memulai obrolan.');
-  }
-  
-  // Kirim pesan ke inisiator
-  try {
-    await ctx.telegram.sendMessage(initiatorUserId, 'Obrolan dimulai! Anda memiliki 30 menit untuk berbicara.');
-  } catch (error) {
-    console.error('Kesalahan saat mengirim pesan ke inisiator:', error);
-    ctx.reply('Obrolan dimulai! Anda memiliki 30 menit untuk berbicara.');
-  }
-});
+      const message = `
+        Name: ${profile.name}
+        Gender: ${profile.gender}
+        Face Claim: ${profile.faceClaim}
+        Personality: ${profile.personality}
+      `;
 
+      const inlineKeyboard = [
+        [{ text: 'Previous', callback_data: 'prev' }, { text: 'Next', callback_data: 'next' }],
+        [{ text: 'Mulai Obrolan', callback_data: `start_chat_${profile.userId}` }],
+      ];
 
+      ctx.reply(message, {
+        reply_markup: {
+          inline_keyboard: inlineKeyboard,
+        },
+      });
+    };
 
+    showProfile(currentIndex);
 
+    bot.action('prev', (ctx) => {
+      const currentIndex = userCurrentIndexes[userId];
+      const newIndex = Math.max(0, currentIndex - 1);
+      showProfile(newIndex);
+    });
+
+    bot.action('next', (ctx) => {
+      const currentIndex = userCurrentIndexes[userId];
+      const newIndex = Math.min(currentIndex + 1, matchingProfiles.length - 1);
+      showProfile(newIndex);
+    });
+    bot.action(/^start_chat_(\d+)$/, async (ctx) => {
+      const [, targetUserId] = ctx.match;
     
+      try {
+        // Di sini, Anda dapat membuat ruangan baru dan mendapatkan kode ruangan
+        const chatId = ctx.chat.id;
+        const roomKey = chatId.toString();
+    
+        if (!(await RoomModel.exists({ roomId: roomKey }))) {
+          const room = new RoomModel({ roomId: roomKey, users: [ctx.from.id], messages: [] });
+          await room.save();
+        }
+    
+        // Kirim undangan ke pengguna dengan perintah /join dan kode ruangan
+        ctx.telegram.sendMessage(targetUserId, `Anda telah diajak untuk bergabung ke ruangan. Ketik /join ${roomKey} untuk bergabung ke ruangan.`);
+    
+        ctx.reply('Undangan Telah Dikirim!');
+    
+      } catch (error) {
+        console.error('Terjadi kesalahan saat membuat ruangan:', error);
+        ctx.reply('Terjadi kesalahan dalam memproses permintaan Anda.');
+      }
+    });
+    
+    
+
+  } catch (error) {
+    console.error('Terjadi kesalahan:', error);
+    ctx.reply('Terjadi kesalahan dalam memproses permintaan Anda.');
+  }
 });
 
-setInterval(() => {
-  const currentTime = new Date();
-  for (const userId in activeChats) {
-    if (activeChats[userId].endTime < currentTime) {
-      delete activeChats[userId]; // Hapus obrolan yang sudah berakhir dari daftar obrolan aktif
-    }
-  }
-}, 60 * 1000); // Interval setiap 1 menit
 
+
+
+
+bot.command('end_room', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const roomKey = chatId.toString();
+
+  if (await RoomModel.exists({ roomId: roomKey })) {
+    await RoomModel.deleteOne({ roomId: roomKey });
+    ctx.reply('Ruangan telah diakhiri.');
+  } else {
+    ctx.reply('Anda tidak memiliki ruangan aktif.');
+  }
+});
+
+bot.command('join', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const roomKey = ctx.message.text.split(' ')[1];
+
+  if (await RoomModel.exists({ roomId: roomKey })) {
+    const room = await RoomModel.findOne({ roomId: roomKey });
+
+    if (room.users.includes(ctx.from.id)) {
+      ctx.reply('Anda sudah bergabung ke ruangan ini.');
+    } else {
+      room.users.push(ctx.from.id);
+      await room.save();
+      ctx.reply('Anda telah bergabung ke ruangan. Pesan yang Anda kirim akan diteruskan ke semua anggota ruangan.');
+    }
+  } else {
+    ctx.reply('Ruangan tidak ditemukan. Pastikan Anda menggunakan kode ruangan yang benar.');
+  }
+});
+
+bot.on('text', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const roomKey = chatId.toString();
+
+  if (await RoomModel.exists({ roomId: roomKey })) {
+    // Ubah pesan ke dalam format yang diinginkan
+    const userProfile = await Profile.findOne({ userId: ctx.from.id });
+    const username = userProfile ? userProfile.name : ctx.from.username;
+    const message = `${username}: ${ctx.message.text}`;
+    
+    const room = await RoomModel.findOne({ roomId: roomKey });
+    room.messages.push(message);
+    await room.save();
+
+    // Meneruskan pesan ke semua anggota ruangan
+    room.users.forEach((userId) => {
+      bot.telegram.sendMessage(userId, message);
+    });
+  }
+});
+
+// Fungsi untuk menghapus ruangan setelah 5 menit
+setInterval(async () => {
+  const now = Date.now();
+  const roomsToDelete = await RoomModel.find({ createdAt: { $lt: new Date(now - 5 * 60 * 1000) } });
+  roomsToDelete.forEach(async (room) => {
+    await room.remove();
+  });
+}, 60000);
 
 
 bot.command("updatePreferensi", async (ctx) => {
@@ -479,6 +462,17 @@ bot.command("updatePreferensi", async (ctx) => {
   }
 });
 
+
+function decodeAndDecrypt(encodedData, key) {
+  const encryptedBase64 = base64URLToBase64(encodedData);
+  const decryptedData = CryptoJS.AES.decrypt(encryptedBase64, key);
+  return decryptedData.toString(CryptoJS.enc.Utf8);
+}
+
+// Fungsi untuk mengubah Base64URL kembali menjadi Base64 biasa
+function base64URLToBase64(base64URL) {
+  return base64URL.replace(/-/g, '+').replace(/_/g, '/');
+}
 
 
 // Jalankan bot
