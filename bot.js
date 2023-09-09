@@ -3,6 +3,15 @@ const base64url = require('base64url');
 const CryptoJS = require('crypto-js');
 const express = require("express");
 const mongoose = require("mongoose");
+const low = require('lowdb');
+const FileSync = require('lowdb/adapters/FileSync');
+
+// Buat adapter dan database Lowdb
+const adapter = new FileSync('lowdb.json'); // Nama file database Lowdb
+const lowdb = low(adapter);
+
+
+
 
 // Mengaktifkan session
 
@@ -13,6 +22,7 @@ const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
 const mongodbAtlasURL = process.env.MONGODB_ATLAS_URL;
 
 const bot = new Telegraf(telegramBotToken);
+
 
 // Koneksi ke MongoDB Atlas
 mongoose
@@ -27,15 +37,15 @@ mongoose
     console.error("Kesalahan saat terhubung ke MongoDB Atlas:", error);
   });
 
- // Mendefinisikan model Chat
-const roomSchema = new mongoose.Schema({
-  roomId: String,
-  users: [Number],
-  messages: [String],
-});
-
-const RoomModel = mongoose.model('Room', roomSchema);
-
+  const roomSchema = new mongoose.Schema({
+    roomId: String,
+    messages: [String],
+    memberCreate: Number, // ID pengguna yang membuat ruangan
+    memberJoin: Number,   // ID pengguna yang bergabung ke ruangan
+  });
+  
+  const RoomModel = mongoose.model('Room', roomSchema);
+  
 // Definisikan skema dan model profil
 const profileSchema = new mongoose.Schema({
   name: String,
@@ -112,7 +122,7 @@ bot.command("help", (ctx) => {
     reply_markup: {
       keyboard: [
         [{ text: "/setProfile" }, { text: "/help" }],
-        [{ text: "/cari" }, { text: "/update" }], [{ text: "/profile" }],
+        [{ text: "/cari" }, { text: "/update" }], [{ text: "/profile" },{text:"/updatePrefrensi"}],
       ],
       resize_keyboard: true,
       one_time_keyboard: true,
@@ -230,6 +240,20 @@ bot.command('up', async (ctx) => {
 
     const [, name, gender, faceClaim, interestTo, personality] = commandArguments;
 
+    // Validasi kata kunci untuk jenis kelamin
+    const validGenders = ["cowo", "cewe", "biseksual"];
+    if (!validGenders.includes(gender.toLowerCase())) {
+      ctx.reply('Jenis kelamin harus "Cowo", "Cewe", atau "Biseksual" Serta periksa apakah ada spasi ganda.');
+      return;
+    }
+
+    // Validasi kata kunci untuk jenis mencari
+    const validInterests = ["teman", "pacar", "fwb", "fwa"];
+    if (!validInterests.includes(interestTo.toLowerCase())) {
+      ctx.reply('Jenis mencari harus "Teman", "Pacar", "Fwb", atau "Fwa" Serta periksa apakah ada spasi ganda.');
+      return;
+    }
+
     // Cari profil berdasarkan userId Telegram
     let profile = await Profile.findOne({ userId });
 
@@ -254,27 +278,59 @@ bot.command('up', async (ctx) => {
   }
 });
 
+
 // Definisikan perintah '/update' untuk memberikan informasi tentang cara menggunakan '/up'
 bot.command("update", (ctx) => {
-  const helpMessage = "Cara mengupdate profil:\n\n /up [Nama] [Jenis Kelamin] [Face Claim] [Minat] [Kepribadian]\n\nContoh: /up Rena perempuan mikasa pacar ramah";
+  const helpMessage = "Cara mengupdate profil:\n\n /up Nama Jenis_Kelamin Face_Claim Minat_Mencari Kepribadian\n\nlist gender (Cowo, Cewe, atau Biseksual)\n\n list minat (Teman, Pacar, Fwb, atau Fwa)\n\nContoh: /up Rena Cewe mikasa pacar ramah";
   ctx.reply(helpMessage);
 });
 
-const userCurrentIndexes = {};
+
+
+// Definisikan showProfile di luar tindakan "Cari"
+const showProfile = (ctx, currentIndex, matchingProfiles, userId) => {
+  const profile = matchingProfiles[currentIndex];
+
+  if (!profile) {
+    return ctx.reply('Tidak ada pasangan yang cocok dengan Anda lagi.');
+  }
+
+  const message = `
+Pengguna ke ${currentIndex + 1}
+Name: ${profile.name}
+Gender: ${profile.gender}
+Face Claim: ${profile.faceClaim}
+Personality: ${profile.personality}
+  `;
+
+  const inlineKeyboard = [
+    [{ text: 'Previous', callback_data: 'prev' }, { text: 'Next', callback_data: 'next' }],
+    [{ text: 'Mulai Obrolan', callback_data: `start_chat_${profile.userId}_${userId}` }],
+  ];
+
+  ctx.reply(message, {
+    reply_markup: {
+      inline_keyboard: inlineKeyboard,
+    },
+  });
+};
 
 bot.command('cari', async (ctx) => {
   const userId = ctx.message.from.id;
 
   try {
-    if (!userCurrentIndexes[userId]) {
-      userCurrentIndexes[userId] = 0;
-    }
-
-    const currentIndex = userCurrentIndexes[userId];
+    // Ambil preferensi pasangan dari database berdasarkan ID pengguna
     const preferensi = await PreferensiPasangan.findOne({ userId });
 
     if (!preferensi) {
       return ctx.reply('Anda belum memiliki preferensi pasangan. Silakan gunakan /updatePreferensi untuk membuatnya.');
+    }
+
+    // Ambil indeks saat ini dari Lowdb berdasarkan ID pengguna
+    let currentIndex = lowdb.get(`userCurrentIndex:${userId}`, 0).value();
+
+    if (!currentIndex) {
+      currentIndex = 0;
     }
 
     const { gender, interestTo } = preferensi;
@@ -284,77 +340,152 @@ bot.command('cari', async (ctx) => {
       return ctx.reply('Tidak ditemukan pasangan yang cocok.');
     }
 
-    const showProfile = (index) => {
-      userCurrentIndexes[userId] = index;
-      const profile = matchingProfiles[index];
+    // Memeriksa apakah ini pencarian pertama atau terakhir
+    const isFirstProfile = currentIndex === 0;
+    const isLastProfile = currentIndex === matchingProfiles.length - 1;
 
-      if (!profile) {
-        return ctx.reply('Tidak ada pasangan yang cocok dengan Anda lagi.');
-      }
+    // Panggil showProfile di sini dengan menggunakan ctx, currentIndex, matchingProfiles, dan userId
+    showProfile(ctx, currentIndex, matchingProfiles, userId, isFirstProfile, isLastProfile);
 
-      const message = `
-        Name: ${profile.name}
-        Gender: ${profile.gender}
-        Face Claim: ${profile.faceClaim}
-        Personality: ${profile.personality}
-      `;
+    // Simpan userId dari matchingProfile ke dalam LowDB
+    lowdb.set(`userCurrentMatchingUserId:${userId}`, matchingProfiles[currentIndex].userId).write();
 
-      const inlineKeyboard = [
-        [{ text: 'Previous', callback_data: 'prev' }, { text: 'Next', callback_data: 'next' }],
-        [{ text: 'Mulai Obrolan', callback_data: `start_chat_${profile.userId}` }],
-      ];
-
-      ctx.reply(message, {
-        reply_markup: {
-          inline_keyboard: inlineKeyboard,
-        },
-      });
-    };
-
-    showProfile(currentIndex);
-
-    bot.action('prev', (ctx) => {
-      const currentIndex = userCurrentIndexes[userId];
-      const newIndex = Math.max(0, currentIndex - 1);
-      showProfile(newIndex);
-    });
-
-    bot.action('next', (ctx) => {
-      const currentIndex = userCurrentIndexes[userId];
-      const newIndex = Math.min(currentIndex + 1, matchingProfiles.length - 1);
-      showProfile(newIndex);
-    });
-    bot.action(/^start_chat_(\d+)$/, async (ctx) => {
-      const [, targetUserId] = ctx.match;
-    
-      try {
-        // Di sini, Anda dapat membuat ruangan baru dan mendapatkan kode ruangan
-        const chatId = ctx.chat.id;
-        const roomKey = chatId.toString();
-    
-        if (!(await RoomModel.exists({ roomId: roomKey }))) {
-          const room = new RoomModel({ roomId: roomKey, users: [ctx.from.id], messages: [] });
-          await room.save();
-        }
-    
-        // Kirim undangan ke pengguna dengan perintah /join dan kode ruangan
-        ctx.telegram.sendMessage(targetUserId, `Anda telah diajak untuk bergabung ke ruangan. Ketik /join ${roomKey} untuk bergabung ke ruangan.`);
-    
-        ctx.reply('Undangan Telah Dikirim!');
-    
-      } catch (error) {
-        console.error('Terjadi kesalahan saat membuat ruangan:', error);
-        ctx.reply('Terjadi kesalahan dalam memproses permintaan Anda.');
-      }
-    });
-    
-    
+    // Update indeks saat ini ke Lowdb
+    lowdb.set(`userCurrentIndex:${userId}`, currentIndex).write();
 
   } catch (error) {
     console.error('Terjadi kesalahan:', error);
     ctx.reply('Terjadi kesalahan dalam memproses permintaan Anda.');
   }
 });
+
+bot.action('next', async (ctx) => {
+  const userId = ctx.callbackQuery.from.id;
+
+  // Ambil preferensi pasangan dari database berdasarkan ID pengguna
+  const preferensi = await PreferensiPasangan.findOne({ userId });
+
+  if (!preferensi) {
+    return ctx.reply('Anda belum memiliki preferensi pasangan. Silakan gunakan /updatePreferensi untuk membuatnya.');
+  }
+
+  const { gender, interestTo } = preferensi;
+
+  // Ambil indeks saat ini dari Lowdb berdasarkan ID pengguna
+  let currentIndex = lowdb.get(`userCurrentIndex:${userId}`, 0).value();
+
+  if (!currentIndex) {
+    currentIndex = 0;
+  }
+
+  // Cari profil yang cocok berdasarkan preferensi
+  const matchingProfiles = await Profile.find({ gender, interestTo });
+
+  if (matchingProfiles.length === 0) {
+    return ctx.reply('Tidak ditemukan pasangan yang cocok.');
+  }
+
+  const newIndex = Math.min(currentIndex + 1, matchingProfiles.length - 1);
+
+  // Memeriksa apakah ini adalah profil terakhir
+  const isLastProfile = newIndex === matchingProfiles.length - 1;
+  if (isLastProfile) {
+    return ctx.reply('Semua pengguna yang cocok dengan prefensi anda telah ditampilkan');
+  }
+
+  showProfile(ctx, newIndex, matchingProfiles, userId);
+
+  // Simpan userId dari matchingProfile ke dalam LowDB
+  lowdb.set(`userCurrentMatchingUserId:${userId}`, matchingProfiles[newIndex].userId).write();
+
+  // Update indeks saat ini ke Lowdb
+  lowdb.set(`userCurrentIndex:${userId}`, newIndex).write();
+});
+
+bot.action('prev', async (ctx) => {
+  const userId = ctx.callbackQuery.from.id;
+
+  // Ambil preferensi pasangan dari database berdasarkan ID pengguna
+  const preferensi = await PreferensiPasangan.findOne({ userId });
+
+  if (!preferensi) {
+    return ctx.reply('Anda belum memiliki preferensi pasangan. Silakan gunakan /updatePreferensi untuk membuatnya.');
+  }
+
+  const { gender, interestTo } = preferensi;
+
+  // Ambil indeks saat ini dari Lowdb berdasarkan ID pengguna
+  let currentIndex = lowdb.get(`userCurrentIndex:${userId}`, 0).value();
+
+  if (!currentIndex) {
+    currentIndex = 0;
+  }
+
+  // Cari profil yang cocok berdasarkan preferensi
+  const matchingProfiles = await Profile.find({ gender, interestTo });
+
+  if (matchingProfiles.length === 0) {
+    return ctx.reply('Tidak ditemukan pasangan yang cocok.');
+  }
+
+  const newIndex = Math.max(currentIndex - 1, 0);
+
+  // Memeriksa apakah ini adalah profil pertama
+  const isFirstProfile = newIndex === 0;
+  if (isFirstProfile) {
+    return ctx.reply('Ini adalah pengguna pertama');
+  }
+
+  showProfile(ctx, newIndex, matchingProfiles, userId);
+
+  // Simpan userId dari matchingProfile ke dalam LowDB
+  lowdb.set(`userCurrentMatchingUserId:${userId}`, matchingProfiles[newIndex].userId).write();
+
+  // Update indeks saat ini ke Lowdb
+  lowdb.set(`userCurrentIndex:${userId}`, newIndex).write();
+});
+
+// Tindakan untuk "Mulai Obrolan"
+bot.action(/^start_chat_(\d+)_(\d+)$/, async (ctx) => {
+  const chatId = ctx.chat.id;
+  const roomKey = chatId.toString();
+  const userId = ctx.callbackQuery.from.id; // Definisikan userId di sini
+  // Mengambil nilai userCurrentMatchingUserId dari LowDB
+const userCurrentMatchingUserId = lowdb.get(`userCurrentMatchingUserId:${userId}`).value();
+
+
+  if (!(await RoomModel.exists({ roomId: roomKey }))) {
+    const room = new RoomModel({
+      roomId: roomKey,
+      messages: [],
+      memberCreate: ctx.from.id,
+      memberJoin: 0,
+    });
+    await room.save();
+
+    // Fetch the matching profile's information
+    const matchingProfile = await Profile.findOne({ userId: chatId });
+
+    // Check if a matching profile is found
+    if (matchingProfile) {
+      // Customize the message to include matchingProfileUserId
+      const message = `
+        Anda telah diundang untuk berbicara dengan ${matchingProfile.name} . Ketik /join ${roomKey} jika Anda ingin menerima undangan.
+      `;
+
+      // Send the customized message
+      bot.telegram.sendMessage(userCurrentMatchingUserId, message);
+      ctx.reply('Undangan telah dikirim!');
+    } else {
+      ctx.reply('Profil pasangan tidak ditemukan.');
+    }
+  } else {
+    ctx.reply('Anda sudah memiliki percakapan aktif. Gunakan perintah /end_room untuk mengakhiri obrolan sebelum membuat yang baru.');
+  }
+});
+
+
+
 
 
 
@@ -366,11 +497,30 @@ bot.command('end_room', async (ctx) => {
 
   if (await RoomModel.exists({ roomId: roomKey })) {
     await RoomModel.deleteOne({ roomId: roomKey });
-    ctx.reply('Ruangan telah diakhiri.');
+    ctx.reply('obrolan telah diakhiri.');
   } else {
-    ctx.reply('Anda tidak memiliki ruangan aktif.');
+    ctx.reply('Anda tidak memiliki obrolan aktif.');
   }
 });
+
+
+// Fungsi untuk menghapus ruangan setelah 5 menit
+const deleteRoomAfterFiveMinutes = async (roomKey) => {
+  // Tunggu 5 menit sebelum menghapus ruangan
+  await new Promise((resolve) => setTimeout(resolve, 5 * 60 * 1000));
+
+  // Setelah 5 menit, hapus ruangan
+  await RoomModel.deleteOne({ roomId: roomKey });
+};
+
+// Fungsi untuk mengirim pesan "test" setelah 4 menit
+const sendTestMessageAfterFourMinutes = async (ctx) => {
+  // Tunggu 4 menit sebelum mengirim pesan "test"
+  await new Promise((resolve) => setTimeout(resolve, 4 * 60 * 1000));
+
+  // Setelah 4 menit, kirim pesan "test"
+  ctx.reply("test");
+};
 
 bot.command('join', async (ctx) => {
   const chatId = ctx.chat.id;
@@ -379,79 +529,84 @@ bot.command('join', async (ctx) => {
   if (await RoomModel.exists({ roomId: roomKey })) {
     const room = await RoomModel.findOne({ roomId: roomKey });
 
-    if (room.users.includes(ctx.from.id)) {
-      ctx.reply('Anda sudah bergabung ke ruangan ini.');
+    if (room) {
+      if (room.memberJoin === ctx.from.id) {
+        ctx.reply('Anda sudah bergabung ke obrolan ini.');
+      } else {
+        if (room.memberJoin !== 0) {
+          // Pengguna yang mengundang sudah bergabung ke obrolan lain
+          ctx.reply('Orang yang mengundang Anda sudah bergabung ke obrolan lain.');
+        } else {
+          room.memberJoin = ctx.from.id; // Update ID pengguna yang bergabung ke obrolan
+          await room.save();
+          ctx.reply('Anda telah bergabung ke obrolan. Pesan yang Anda kirim akan diteruskan ke semua anggota obrolan.');
+
+          // Setelah bergabung ke obrolan, mulai penghitungan waktu 5 menit untuk menghapus ruangan
+          deleteRoomAfterFiveMinutes(roomKey);
+
+          // Setelah bergabung ke obrolan, mulai penghitungan waktu 4 menit untuk mengirim pesan "test"
+          sendTestMessageAfterFourMinutes(ctx);
+        }
+      }
     } else {
-      room.users.push(ctx.from.id);
-      await room.save();
-      ctx.reply('Anda telah bergabung ke ruangan. Pesan yang Anda kirim akan diteruskan ke semua anggota ruangan.');
+      ctx.reply('Obrolan tidak ditemukan. Pastikan Anda menggunakan kode obrolan yang benar.');
     }
   } else {
-    ctx.reply('Ruangan tidak ditemukan. Pastikan Anda menggunakan kode ruangan yang benar.');
+    ctx.reply('Obrolan tidak ditemukan. Pastikan Anda menggunakan kode obrolan yang benar.');
   }
 });
 
-bot.on('text', async (ctx) => {
-  const chatId = ctx.chat.id;
-  const roomKey = chatId.toString();
 
-  if (await RoomModel.exists({ roomId: roomKey })) {
-    // Ubah pesan ke dalam format yang diinginkan
-    const userProfile = await Profile.findOne({ userId: ctx.from.id });
-    const username = userProfile ? userProfile.name : ctx.from.username;
-    const message = `${username}: ${ctx.message.text}`;
-    
-    const room = await RoomModel.findOne({ roomId: roomKey });
-    room.messages.push(message);
-    await room.save();
 
-    // Meneruskan pesan ke semua anggota ruangan
-    room.users.forEach((userId) => {
-      bot.telegram.sendMessage(userId, message);
-    });
-  }
+// Definisikan perintah /updatePreferensi untuk memberikan informasi tentang cara menggunakan '/upPre'
+bot.command("updatePreferensi", (ctx) => {
+  const helpMessage = "Cara mengupdate Prefensi Pasangan:\n\n /upPre Tertarik_Mencari Tertarik_Mencari\n\nlist gender (Cowo, Cewe, atau Biseksual)\n\nlist minat (Teman, Pacar, Fwb, atau Fwa) \n\nContoh: /upPre cewe fwb";
+  ctx.reply(helpMessage);
 });
 
-// Fungsi untuk menghapus ruangan setelah 5 menit
-setInterval(async () => {
-  const now = Date.now();
-  const roomsToDelete = await RoomModel.find({ createdAt: { $lt: new Date(now - 5 * 60 * 1000) } });
-  roomsToDelete.forEach(async (room) => {
-    await room.remove();
-  });
-}, 60000);
 
-
-bot.command("updatePreferensi", async (ctx) => {
+bot.command("upPre", async (ctx) => {
   const userId = ctx.from.id;
   try {
+    const commandArguments = ctx.message.text.split(" ");
+    if (commandArguments.length < 3) {
+      ctx.reply('Cara mengupdate prefensi pasangan:\n\n /upPre [Jenis Kelamin] [Jenis Mencari]');
+      return;
+    }
+
+    const [, gender, interestTo] = commandArguments;
+
+    // Validasi kata kunci untuk jenis kelamin
+    const validGenders = ["cowo", "cewe", "biseksual"];
+    const lowerCaseGender = gender.toLowerCase();
+   // Validasi kata kunci untuk jenis kelamin
+if (!validGenders.includes(gender.toLowerCase())) {
+  ctx.reply('Jenis kelamin harus "Cowo," "Cewe," atau "Biseksual", Serta periksa apakah ada spasi ganda.');
+  return;
+}
+
+    // Validasi kata kunci untuk jenis mencari
+    const validInterests = ["teman", "pacar", "fwb", "fwa"];
+    const lowerCaseInterestTo = interestTo.toLowerCase();
+  // Validasi kata kunci untuk jenis mencari
+if (!validInterests.includes(interestTo.toLowerCase())) {
+  ctx.reply('Jenis mencari harus "Teman", "Pacar", "Fwb", atau "Fwa", Serta periksa apakah ada spasi ganda.');
+  return;
+}
+
     // Menemukan atau membuat preferensi pasangan berdasarkan userId
     let preferensi = await PreferensiPasangan.findOne({ userId });
 
     if (!preferensi) {
       // Jika preferensi pasangan belum ada, buat profil baru
-      const commandArguments = ctx.message.text.split(" ");
-      if (commandArguments.length < 4) {
-        ctx.reply('Cara mengupdate prefensi pasangan:\n\n /updatePreferensi [Jenis Kelamin] [Tertarik Mencari]');
-        return;
-      }
-
-      const [, gender, ...interestTo] = commandArguments;
-      const newPreferensi = new PreferensiPasangan({ userId, gender, interestTo: interestTo.join(" ") });
+      const newPreferensi = new PreferensiPasangan({ userId, gender: lowerCaseGender, interestTo: lowerCaseInterestTo });
       await newPreferensi.save();
 
       ctx.reply('Profil preferensi pasangan berhasil dibuat!');
     } else {
       // Jika preferensi pasangan sudah ada, perbarui profil
-      const commandArguments = ctx.message.text.split(" ");
-      if (commandArguments.length < 3) {
-        ctx.reply('Cara mengupdate prefensi pasangan:\n\n /updatePreferensi [Jenis Kelamin] [Tertarik Mencari]');
-        return;
-      }
-
-      const [, gender, ...interestTo] = commandArguments;
-      preferensi.gender = gender;
-      preferensi.interestTo = interestTo.join(" ");
+      preferensi.gender = lowerCaseGender;
+      preferensi.interestTo = lowerCaseInterestTo;
       await preferensi.save();
 
       ctx.reply('Profil preferensi pasangan berhasil diperbarui!');
@@ -459,6 +614,39 @@ bot.command("updatePreferensi", async (ctx) => {
   } catch (error) {
     console.error('Kesalahan saat memperbarui preferensi pasangan:', error);
     ctx.reply('Terjadi kesalahan saat memperbarui preferensi pasangan.');
+  }
+});
+
+
+
+// Mendengarkan pesan dari bot
+bot.on('text', async (ctx) => {
+  const userId = ctx.from.id; // Mendapatkan ID pengguna yang mengirim pesan
+  const text = ctx.message.text; // Mendapatkan teks pesan
+
+  // Cari ruangan yang memiliki memberCreate atau memberJoin sama dengan userId
+  const room = await RoomModel.findOne({
+    $or: [{ memberCreate: userId }, { memberJoin: userId }],
+  });
+
+  if (room) {
+    // Tambahkan pesan ke dalam daftar pesan di ruangan
+    room.messages.push(text);
+    await room.save(); // Simpan perubahan ke dalam database
+
+    // Balas pesan pengguna
+    const profile = await Profile.findOne({ userId });
+    const message = `${profile.name}: ${ctx.message.text}`;
+    
+    if (userId === room.memberCreate) {
+      // Jika pengguna adalah memberCreate, kirim pesan hanya ke memberJoin
+      bot.telegram.sendMessage(room.memberJoin, message);
+      ctx.reply('pesan berhasil terkirim!');
+    } else if (userId === room.memberJoin) {
+      // Jika pengguna adalah memberJoin, kirim pesan hanya ke memberCreate
+      bot.telegram.sendMessage(room.memberCreate, message);
+      ctx.reply('pesan berhasil terkirim!');
+    }
   }
 });
 
