@@ -8,6 +8,8 @@
     "mongoose": "^7.4.0",
     "nodemon": "^3.0.1",
     "telegraf": "^4.12.2"
-   
+  },
+  "scripts": {
+    "start": "node bot.js"
   }
 }
