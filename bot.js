@@ -77,7 +77,7 @@ app.listen(port, () => {
 });
 
 // Menentukan webhook path
-const webhookPath = "/YOUR_WEBHOOK_PATH"; // Ganti dengan webhook path yang sesuai
+const webhookPath = "/BotLara"; // Ganti dengan webhook path yang sesuai
 
 // Menghubungkan bot dengan API Telegram menggunakan webhook
 app.use(bot.webhookCallback(webhookPath));
