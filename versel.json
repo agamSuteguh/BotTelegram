@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "bot.js",
+      "use": "@now/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/BotLara",
+      "dest": "bot.js"
+    }
+  ],
+  "env": {
+    "TELEGRAM_BOT_TOKEN": "6215339866:AAHz6IIXyANUUM4_I1r57Fsrc_y3USKUIDs",
+    "MONGODB_ATLAS_URL": "mongodb+srv://Agam:TIILvSqQTrdtKFkX@cluster0.f7lnxwz.mongodb.net/?retryWrites=true&w=majority"
+  }
+}
