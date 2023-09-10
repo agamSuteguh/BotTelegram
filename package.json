@@ -10,6 +10,6 @@
     "telegraf": "^4.12.2"
   },
   "scripts": {
-    "start": "node bot.js"
+    "prod": "node bot.js"
   }
 }
