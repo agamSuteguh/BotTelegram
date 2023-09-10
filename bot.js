@@ -127,7 +127,7 @@ bot.command("help", (ctx) => {
   // Mengirim pesan dengan tombol
   ctx.reply(
     `
-      Selamat datang di Tinder Roleplay Bot! Berikut adalah daftar perintah yang dapat Anda gunakan:\n/help - Menampilkan daftar perintah yang tersedia.\n/setProfile - Membuat profil baru.\n/profile - Menampilkan profil Anda.\n/update - Memperbarui profil.\n/cari - Mencari pasangan.\n/updatePreferensi - Mengupdate preferensi pasangan Anda.
+      Selamat datang di Tinder  Bot! Berikut adalah daftar perintah yang dapat Anda gunakan:\n/help - Menampilkan daftar perintah yang tersedia.\n/setProfile - Membuat profil baru.\n/profile - Menampilkan profil Anda.\n/update - Memperbarui profil.\n/cari - Mencari pasangan.\n/updatePreferensi - Mengupdate preferensi pasangan Anda.
       `,
     keyboard
   );
