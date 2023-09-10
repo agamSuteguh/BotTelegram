@@ -83,7 +83,7 @@ const webhookPath = "/YOUR_WEBHOOK_PATH"; // Ganti dengan webhook path yang sesu
 app.use(bot.webhookCallback(webhookPath));
 
 // Mengatur endpoint webhook
-bot.telegram.setWebhook(`https://example.com${webhookPath}`); // Ganti dengan URL yang valid sesuai dengan konfigurasi server Anda
+bot.telegram.setWebhook(`https://bot-telegram-bice.vercel.app${webhookPath}`); // Ganti dengan URL yang valid sesuai dengan konfigurasi server Anda
 bot.use(session()); // Aktifkan penggunaan sesi di bot Anda
 
 // Mendengarkan perintah '/start'
