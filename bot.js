@@ -7,8 +7,9 @@ const dotenv = require("dotenv");
 
 // Mengaktifkan session
 dotenv.config();
-const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
-const mongodbAtlasURL = process.env.MONGODB_ATLAS_URL;
+const telegramBotToken = "7018626182:AAG6_JXdLgInX5VAHzvesyyAz250FplzDes"
+const mongodbAtlasURL = "mongodb+srv://Haiya:zUG0PmoebHpJ0cjT@cluster0.f7lnxwz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+
 
 const bot = new Telegraf(telegramBotToken);
 
